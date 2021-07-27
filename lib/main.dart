@@ -86,6 +86,30 @@ void setShrPrefSwitches(key, value, webview){
   setStateStack.last();
 }
 
+void start(onData, onDone) async {
+  if (isolate != null)  return;
+  ReceivePort receivePort= ReceivePort(); //port for this main isolate to receive messages.
+  isolate = await Isolate.spawn(runTimer, receivePort.sendPort);
+  receivePort.listen(onData, onDone: onDone);
+}
+
+void stop() {
+  if (isolate != null) {
+    isolate!.kill(priority: Isolate.immediate);
+    isolate = null;
+  }
+  print("stopped");
+}
+void runTimer(SendPort sendPort) {
+  int counter = 0;
+  Timer.periodic(new Duration(seconds: 10), (Timer t) {
+    counter = (counter + 1) % 60;
+    String msg = 'notification ' + counter.toString();
+    print('SEND: ' + msg + ' - ');
+    sendPort.send(counter.toString());
+  });
+}
+
 // config
 List<ShrPrefSwitch> shrPrefSwitches = [
   ShrPrefSwitch(
@@ -647,30 +671,6 @@ class BotSettingsArgs {
   BotSettingsArgs(this.webViewController);
 }
 
-void start(onData, onDone) async {
-  if (isolate != null)  return;
-  ReceivePort receivePort= ReceivePort(); //port for this main isolate to receive messages.
-  isolate = await Isolate.spawn(runTimer, receivePort.sendPort);
-  receivePort.listen(onData, onDone: onDone);
-}
-
-void stop() {
-  if (isolate != null) {
-    isolate!.kill(priority: Isolate.immediate);
-    isolate = null;
-  }
-  print("stopped");
-}
-void runTimer(SendPort sendPort) {
-  int counter = 0;
-  Timer.periodic(new Duration(seconds: 10), (Timer t) {
-    counter = (counter + 1) % 60;
-    String msg = 'notification ' + counter.toString();
-    print('SEND: ' + msg + ' - ');
-    sendPort.send(counter.toString());
-  });
-}
-
 /// This is the private State class that goes with MyStatefulWidget.
 class _BotSettingsRouteState extends State<BotSettingsRoute> {
 
@@ -683,17 +683,6 @@ class _BotSettingsRouteState extends State<BotSettingsRoute> {
 
   void commitView() {
     setState((){});
-  }
-
-  Future onSelectNotification(String? payload) async {
-    print("canceled: $payload");
-    // showDialog(
-    //   context: context,
-    //   builder: (_) => new AlertDialog(
-    //     title: new Text('Notification'),
-    //     content: new Text('$payload'),
-    //   ),
-    // );
   }
 
   @override
