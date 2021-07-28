@@ -3,11 +3,15 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:core';
 import 'dart:isolate';
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart' hide Cookie;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/retry.dart';
 
 // icon
 // https://fonts.google.com/icons?selected=Material+Icons
@@ -17,6 +21,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 // https://web.archive.org/web/20210127075231/https://codingwithjoe.com/dart-fundamentals-isolates/
 Isolate? isolate;
+CookieManager cookieManager = CookieManager.instance();
 
 List<void Function()> setStateStack = [];
 
@@ -86,29 +91,171 @@ void setShrPrefSwitches(key, value, webview){
   setStateStack.last();
 }
 
+// beg background
+final int helloAlarmID = 0;
+// port passing may help https://stackoverflow.com/questions/62725890/flutter-how-to-pass-messages-to-the-isolate-created-by-android-alarmmanager
 void start(onData, onDone) async {
-  if (isolate != null)  return;
-  ReceivePort receivePort= ReceivePort(); //port for this main isolate to receive messages.
-  isolate = await Isolate.spawn(runTimer, receivePort.sendPort);
-  receivePort.listen(onData, onDone: onDone);
+  // if (isolate != null)  return;
+  // ReceivePort receivePort= ReceivePort(); //port for this main isolate to receive messages.
+  // isolate = await Isolate.spawn(runTimer, receivePort.sendPort);
+  // receivePort.listen(onData, onDone: onDone);
+  stop(); // is it a good approach?
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  prefs.setInt("counter", 0);
+  print('start!');
+  await AndroidAlarmManager.periodic(
+      const Duration(minutes: 1), helloAlarmID, runTimer);
 }
 
 void stop() {
-  if (isolate != null) {
-    isolate!.kill(priority: Isolate.immediate);
-    isolate = null;
-  }
+  // if (isolate != null) {
+  //   isolate!.kill(priority: Isolate.immediate);
+  //   isolate = null;
+  // }
   print("stopped");
+  //headlessWebView?.dispose();
+  AndroidAlarmManager.cancel(helloAlarmID);
 }
-void runTimer(SendPort sendPort) {
-  int counter = 0;
-  Timer.periodic(new Duration(seconds: 10), (Timer t) {
-    counter = (counter + 1) % 60;
-    String msg = 'notification ' + counter.toString();
-    print('SEND: ' + msg + ' - ');
-    sendPort.send(counter.toString());
-  });
+
+void runTimer() async {
+
+  SharedPreferences prefs = await SharedPreferences.getInstance();
+  var counter = prefs.getInt('counter') ?? 0;
+
+  final hClient = http.Client();
+  final UserAgentClient botClient = UserAgentClient("Bot", hClient);
+
+  await botClient.doLoad();
+
+  // option 1
+  if(counter % 10 == 9){
+    Map<String, String> bodyFields = {
+      'message': 'keep!',
+      'to': botClient.id,
+    };
+    await botClient.doPost(
+        Uri.parse("https://drrr.com/room/?ajax=1&api=json"),
+        null, bodyFields);
+  }
+  else{
+    // option 2
+    await botClient.doGet(
+        Uri.parse('https://drrr.com/json.php?update=${
+            DateTime.now().millisecondsSinceEpoch - 60}'), null);
+  }
+
+  prefs.setInt("counter", (counter + 1) % 60);
 }
+
+// void runTimer(SendPort sendPort) {
+//   int counter = 0;
+//   Timer.periodic(new Duration(seconds: 10), (Timer t) {
+//     counter = (counter + 1) % 60;
+//     String msg = 'notification ' + counter.toString();
+//     print('SEND: ' + msg + ' - ');
+//     sendPort.send(counter.toString());
+//   });
+// }
+
+// end background
+
+// beg http
+class UserAgentClient extends http.BaseClient {
+  String cookie = '', id = '';
+  final String userAgent;
+  final http.Client _inner;
+  UserAgentClient(this.userAgent, this._inner);
+
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    request.headers['user-agent'] = userAgent;
+    return _inner.send(request);
+  }
+
+  Future<http.Response> doPost(url, cookie, body) async {
+    Map<String, String> headers = {
+      'user-agent': this.userAgent,
+      'cookie': cookie ?? this.cookie ?? '',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    return _inner.post(url, headers: headers, body: body);
+  }
+
+  Future<http.Response> doGet(url, cookie) async {
+    Map<String, String> headers = {
+      'user-agent': this.userAgent,
+      'cookie': cookie ?? this.cookie ?? '',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    return _inner.get(url, headers: headers);
+  }
+
+  Future<void> doLoad() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    this.id = prefs.getString('id') ?? '';
+    this.cookie = prefs.getString('cookie') ?? '';
+  }
+
+  Future<void> doSave() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    prefs.setString("id", this.id);
+    prefs.setString("cookie", this.cookie);
+  }
+}
+
+final httpClient = http.Client();
+final UserAgentClient uaClient = UserAgentClient("Bot", httpClient);
+
+String getCookie(str){
+  var cookie = Cookie.fromSetCookieValue(str);
+  return '${cookie.name}=${cookie.value};';
+}
+
+void doLogin(name, avatar, lang, controller) async {
+
+    var url = Uri.parse('https://drrr.com/?api=json');
+    var res = await uaClient.doGet(url, null);
+    var token = json.decode(res.body)['token'];
+
+    var cookieRaw = getCookie(res.headers['Set-Cookie'] ??
+                               res.headers['set-cookie'] ?? '') ;
+
+    Map<String, String> bodyFields = {
+       'name': name,
+       'login': 'ENTER',
+       'token': token,
+       'language': lang,
+       'icon': avatar,
+    };
+
+    var resp = await uaClient.doPost(
+        url, cookieRaw, bodyFields,
+    );
+
+    cookieRaw = resp.headers['Set-Cookie'] ??
+                 resp.headers['set-cookie'] ?? '';
+
+    uaClient.cookie = getCookie(cookieRaw);
+
+    var cookie = Cookie.fromSetCookieValue(cookieRaw);
+
+    cookieManager.setCookie(
+      url: Uri.parse('https://drrr.com/'),
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path ?? '',
+      isSecure: cookie.secure,
+      isHttpOnly: cookie.httpOnly,
+      iosBelow11WebViewController: controller
+    );
+
+    controller?.reload();
+    res = await uaClient.doGet(Uri.parse('https://drrr.com/profile/?api=json'), null);
+    uaClient.id = json.decode(res.body)['profile']['id'];
+    print("id is =======> ${uaClient.id}");
+    await uaClient.doSave();
+}
+
 
 // config
 List<ShrPrefSwitch> shrPrefSwitches = [
@@ -144,7 +291,7 @@ List<ShrPrefSwitch> shrPrefSwitches = [
                        }); ''' :
                           ''' \$.ajax({
                          type: "GET",
-                         url: `https://drrr.com/json.php?\${Math.round(new Date().getTime()/1000) - 60}`,
+                         url: `https://drrr.com/json.php?update=\${Math.round(new Date().getTime()/1000) - 60}`,
                          success: function(data){ /* alert(JSON.stringify(data)); */ },
                          error: function(data){ }
                        });''';
@@ -170,7 +317,7 @@ List<ShrPrefSwitch> shrPrefSwitches = [
                      }); ''' :
             ''' \$.ajax({
                        type: "GET",
-                       url: `https://drrr.com/json.php?\${Math.round(new Date().getTime()/1000) - 60}`,
+                       url: `https://drrr.com/json.php?update=\${Math.round(new Date().getTime()/1000) - 60}`,
                        success: function(data){ /* alert(JSON.stringify(data)); */ },
                        error: function(data){ }
                      });''';
@@ -199,11 +346,13 @@ List<ShrPrefSwitch> shrPrefSwitches = [
 ];
 
 
-// TODO: clear all notofication on app terminated
+// TODO: clear all notification on app terminated
 // TODO: try ajax on webView
 
 Future main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await AndroidAlarmManager.initialize();
 
   if (Platform.isAndroid) {
     await AndroidInAppWebViewController
@@ -322,8 +471,27 @@ class _MyAppState extends State<MyApp> {
                                           \$("#talks").children()[0].remove();
                                         return \$.origAjax.apply(\$, args);
                                       }
+                                      if(location.href == "https://drrr.com/"){
+                                        //window.addEventListener(
+                                        //  "flutterInAppWebViewPlatformReady",
+                                        //  function(event) {
+                                        //     alert("bind");
+                                             \$('form').submit(function(){
+                                               window.flutter_inappwebview.callHandler(
+                                                 'login', \$('#form-name').val(),
+                                                 \$('.user-icon.active').attr('data-avatar'),
+                                                 \$('#form-language-select').val())
+                                                 .then(function(result) {
+                                                 console.log(result);
+                                               });
+                                               return false;
+                                             });
+                                        //  }
+                                        //);
+                                      }
                                      }, 200);
                                      load();
+
                                    })();
                                   ''',
                               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END),
@@ -332,6 +500,12 @@ class _MyAppState extends State<MyApp> {
                           //     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END),
                         ]),
                         onLoadStart: (controller, url) {
+                          controller.addJavaScriptHandler(
+                              handlerName: 'login',
+                              callback: (args) => {
+                                doLogin(args[0], args[1], args[2], controller),
+                                jsonEncode("done")
+                        });
                           setState(() {
                             this.url = url.toString();
                             urlController.text = this.url;
@@ -490,7 +664,7 @@ class SampleMenu extends StatelessWidget {
   SampleMenu(this.controller);
 
   final Future<InAppWebViewController> controller;
-  final CookieManager cookieManager = CookieManager();
+  // final CookieManager cookieManager = CookieManager();
 
   @override
   Widget build(BuildContext context) {
@@ -624,11 +798,11 @@ class SampleMenu extends StatelessWidget {
   }
 
   void _onClearCookies(BuildContext context) async {
-    await cookieManager.deleteAllCookies();
-    String message = 'There were cookies. Now, they are gone!';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message),
-    ));
+    // await cookieManager.deleteAllCookies();
+    // String message = 'There were cookies. Now, they are gone!';
+    // ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    //   content: Text(message),
+    // ));
   }
 
   void _onBotSettings(InAppWebViewController? controller, BuildContext context) async {
@@ -662,7 +836,6 @@ class BotSettingsRoute extends StatefulWidget {
 
 Future<bool> saveSwitchState(String key, bool value) async {
   SharedPreferences prefs = await SharedPreferences.getInstance();
-  prefs.setBool(key, value);
   return prefs.setBool(key, value);
 }
 
