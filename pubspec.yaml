@@ -1,5 +1,5 @@
-name: dartbot
-description: A new Flutter project.
+name: LmdBotApp
+description: An App for Bot on Drrr.com.
 
 # The following line prevents the package from being accidentally published to
 # pub.dev using `pub publish`. This is preferred for private packages.
@@ -29,6 +29,7 @@ dependencies:
   shared_preferences: ^2.0.6
   android_alarm_manager_plus: ^1.0.2
   http: ^0.13.3
+  tuple: ^2.0.0
   # https://pub.dev/packages/puppeteer
 
 
