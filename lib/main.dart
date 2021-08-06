@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'dart:core';
+import 'dart:math';
 import 'dart:isolate';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -11,8 +12,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:http/http.dart' as http;
-import 'package:tuple/tuple.dart';
 import 'package:http/retry.dart';
+import 'LmdBotAppSetting.dart';
+import 'LmdBotAppEditor.dart';
+import 'LmdBotAppGlobal.dart';
+import 'LmdBotAppScript.dart';
 
 // icon
 // https://fonts.google.com/icons?selected=Material+Icons
@@ -21,326 +25,14 @@ import 'package:http/retry.dart';
 // https://pub.dev/documentation/flutter_local_notifications/latest/flutter_local_notifications/FlutterLocalNotificationsPlugin-class.html
 
 // https://web.archive.org/web/20210127075231/https://codingwithjoe.com/dart-fundamentals-isolates/
-Isolate? isolate;
-CookieManager cookieManager = CookieManager.instance();
-
-List<void Function()> setStateStack = [];
-
-// beg local notification
-FlutterLocalNotificationsPlugin
-  flutterLocalNotificationsPlugin
-    = new FlutterLocalNotificationsPlugin();
-
-var flutterInitSettings = new InitializationSettings(
-    android: new AndroidInitializationSettings('@mipmap/ic_launcher'),
-    iOS: new IOSInitializationSettings());
-
-void showNotification() async {
-  var android = new AndroidNotificationDetails(
-    'cancel', 'KeepRoom', 'KeepRoomOperation',
-    priority: Priority.high, importance: Importance.max,
-    autoCancel: false, ongoing: false,  playSound: false,
-    onlyAlertOnce: true,
-    // because I cannot use onDestroy, so I can't set ongoing as true
-  );
-  var iOS = new IOSNotificationDetails(presentSound: false);
-  var platform = new NotificationDetails(android: android, iOS: iOS);
-  await flutterLocalNotificationsPlugin.show(
-      NoteID.cancelKeepRoom.index, 'Dollars keep alive',
-      'Click to undo keep', platform, payload: ShrPrefKey.keepAlive.toString());
-}
-// end local notification
-
-// beg ShrPrefSwitches
-enum ShrPrefKey {
-  alwaysMe,
-  keepAlive,
-  keepRoom,
-}
-
-class ShrPrefSwitch {
-  bool value = false;
-  ShrPrefKey key;
-  String title;
-  final Icon icon;
-
-  // consider template function, on app start
-  void Function(ShrPrefSwitch data)? start;
-
-  // consider template function, on document ready
-  void Function(InAppWebViewController?, ShrPrefSwitch data)? ready;
-
-  // consider template function, on switch change
-  void Function(bool, InAppWebViewController?, ShrPrefSwitch)? change;
-
-  // consider template function
-  void onChanged(bool _value, InAppWebViewController? webview, ShrPrefSwitch data) {
-    this.value = _value;
-    saveSwitchState(key.toString(), value);
-    change?.call(value, webview, data);
-  }
-
-  ShrPrefSwitch(this.key, this.title, this.icon,
-      {this.start, this.ready, this.change});
-
-  init(commitView) async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    this.value = prefs.getBool(this.key.toString()) ?? false;
-    commitView();
-  }
-}
-
-ShrPrefSwitch assocSPS(key){
-  return shrPrefSwitches.firstWhere((s) => s.key == key);
-}
-
-void setShrPrefSwitches(key, value, webview){
-  var dep = assocSPS(key);
-  if(dep.value == value) return;
-  dep.value = value;
-  dep.onChanged(value, webview, dep);
-  setStateStack.last();
-}
-// end ShrPrefSwitches
-
-// config
-List<ShrPrefSwitch> shrPrefSwitches = [
-  ShrPrefSwitch(
-      ShrPrefKey.alwaysMe, "Always /me",
-      const Icon(Icons.try_sms_star),
-      ready: (webViewController, data) => {
-        webViewController?.evaluateJavascript(
-            source: 'window.autoMe = ${data.value}')
-      },
-      change: (value, webViewController, data) => {
-        webViewController?.evaluateJavascript(
-            source: 'window.autoMe = $value')
-      }),
-  ShrPrefSwitch(
-      ShrPrefKey.keepAlive, "Keeping Alive",
-      const Icon(Icons.auto_awesome),
-      start: (data) => {
-        if(data.value){ start() }
-      },
-      change: (value, webViewController, data) => {
-        if(value){ start() }
-        else {
-          setShrPrefSwitches(ShrPrefKey.keepRoom, false, webViewController),
-          flutterLocalNotificationsPlugin.cancel(NoteID.cancelKeepRoom.index),
-          stop()
-        }
-      }),
-  ShrPrefSwitch(
-      ShrPrefKey.keepRoom, "Keeping Room",
-      const Icon(Icons.auto_fix_high),
-      change: (bool value, webViewController, data) => {
-        if(data.value){
-          setShrPrefSwitches(ShrPrefKey.keepAlive, true, webViewController)
-        }
-      }),
-];
-
-var userAgent = "Mobile";
-const Map<String, Icon> userAgents = const {
-  'Bot': const Icon(Icons.build),
-  'Tv': const Icon(Icons.tv),
-  'Tablet': const Icon(Icons.tablet_android),
-  'Mobile': const Icon(Icons.phone_android),
-  'Desktop': const Icon(Icons.desktop_windows),
-};
-var userAgentKeys = userAgents.entries.map((u) => u.key);
-
-// beg http
-class BotClient extends http.BaseClient {
-  String cookie = '', id = '';
-  final http.Client _inner;
-  BotClient(this._inner);
-
-  Future<http.StreamedResponse> send(http.BaseRequest request) {
-    request.headers['user-agent'] = userAgent;
-    return _inner.send(request);
-  }
-
-  Future<http.Response> doPost(url, cookie, body) async {
-    Map<String, String> headers = {
-      'user-agent': userAgent,
-      'cookie': cookie ?? this.cookie ?? '',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    };
-    return _inner.post(url, headers: headers, body: body);
-  }
-
-  Future<http.Response> doGet(url, cookie) async {
-    Map<String, String> headers = {
-      'user-agent': userAgent,
-      'cookie': cookie ?? this.cookie ?? '',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    };
-    return _inner.get(url, headers: headers);
-  }
-
-  Future<void> doLoad() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    this.id = prefs.getString('id') ?? '';
-    this.cookie = prefs.getString('cookie') ?? '';
-  }
-
-  Future<void> doSave() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    prefs.setString("id", this.id);
-    prefs.setString("cookie", this.cookie);
-  }
-}
-
-final httpClient = http.Client();
-final BotClient botClient = BotClient(httpClient);
-
-String getCookie(str){
-  var cookie = Cookie.fromSetCookieValue(str);
-  return '${cookie.name}=${cookie.value};';
-}
-
-void doLogin(name, avatar, lang, controller) async {
-
-  var url = Uri.parse('https://drrr.com/?api=json');
-  var res = await botClient.doGet(url, null);
-  var token = json.decode(res.body)['token'];
-
-  var cookieRaw = getCookie(res.headers['Set-Cookie'] ??
-      res.headers['set-cookie'] ?? '') ;
-
-  Map<String, String> bodyFields = {
-    'name': name, 'login': 'ENTER',
-    'token': token, 'language': lang, 'icon': avatar,
-  };
-
-  var resp = await botClient.doPost( url, cookieRaw, bodyFields, );
-
-  cookieRaw = resp.headers['Set-Cookie'] ??
-      resp.headers['set-cookie'] ?? '';
-
-  botClient.cookie = getCookie(cookieRaw);
-
-  var cookie = Cookie.fromSetCookieValue(cookieRaw);
-
-  cookieManager.setCookie(
-      url: Uri.parse('https://drrr.com/'),
-      name: cookie.name,
-      value: cookie.value,
-      domain: cookie.domain,
-      path: cookie.path ?? '',
-      isSecure: cookie.secure,
-      isHttpOnly: cookie.httpOnly,
-      iosBelow11WebViewController: controller
-  );
-
-  controller?.reload();
-  res = await botClient.doGet(Uri.parse('https://drrr.com/profile/?api=json'), null);
-  botClient.id = json.decode(res.body)['profile']['id'];
-  print("id is =======> ${botClient.id}");
-  await botClient.doSave();
-}
-
-// beg background
-final int helloAlarmID = 0;
-// port passing may help https://stackoverflow.com/questions/62725890/flutter-how-to-pass-messages-to-the-isolate-created-by-android-alarmmanager
-void start() async {
-  // if (isolate != null)  return;
-  // ReceivePort receivePort= ReceivePort(); //port for this main isolate to receive messages.
-  // isolate = await Isolate.spawn(runTimer, receivePort.sendPort);
-  // receivePort.listen(onData, onDone: onDone);
-  stop(); // is it a good approach?
-
-  showNotification();
-  SharedPreferences prefs = await SharedPreferences.getInstance();
-  prefs.setInt("counter", 0);
-  print('start!');
-  await AndroidAlarmManager.periodic(
-      const Duration(minutes: 1), helloAlarmID, runTimer);
-}
-
-void stop() {
-  // if (isolate != null) {
-  //   isolate!.kill(priority: Isolate.immediate);
-  //   isolate = null;
-  // }
-  print("stopped");
-  //headlessWebView?.dispose();
-  AndroidAlarmManager.cancel(helloAlarmID);
-}
-
-void runTimer() async {
-
-  initConfig();
-
-  flutterLocalNotificationsPlugin.initialize(
-      flutterInitSettings,
-      onSelectNotification: (String? payload) async => {
-        setShrPrefSwitches(
-            ShrPrefKey.values.firstWhere((e) => e.toString() == payload),
-            false, null)
-      });
-
-  showNotification();
-
-  SharedPreferences prefs = await SharedPreferences.getInstance();
-  var counter = prefs.getInt('counter') ?? 0;
-  var update = prefs.getString('update') ??
-      ((DateTime.now().millisecondsSinceEpoch / 1000) - 60).toString();
-
-  final hClient = http.Client();
-  final BotClient botClient = BotClient(hClient);
-
-  await botClient.doLoad();
-
-  var keep = assocSPS(ShrPrefKey.keepRoom).value;
-  // option 1
-  if(keep && counter % 10 == 9){
-    Map<String, String> bodyFields = {
-      'message': 'keep!',
-      'to': botClient.id,
-    };
-    await botClient.doPost(
-        Uri.parse("https://drrr.com/room/?ajax=1&api=json"),
-        null, bodyFields);
-  }
-  else{
-    // option 2
-    var url = 'https://drrr.com/json.php?update=$update';
-    var res = await botClient.doGet(
-        Uri.parse(url), null);
-    print(url);
-    print(res.body);
-    var upd = json.decode(res.body)['update'];
-    update = upd == null ? update : upd.floor().toString();
-  }
-
-  prefs.setInt("counter", (counter + 1) % 60);
-  prefs.setString("update", update);
-}
-
-// void runTimer(SendPort sendPort) {
-//   int counter = 0;
-//   Timer.periodic(new Duration(seconds: 10), (Timer t) {
-//     counter = (counter + 1) % 60;
-//     String msg = 'notification ' + counter.toString();
-//     print('SEND: ' + msg + ' - ');
-//     sendPort.send(counter.toString());
-//   });
-// }
-
-// end background
 
 // TODO: clear all notification on app terminated
 // TODO: try ajax on webView
-
-void initConfig() async {
-  SharedPreferences prefs = await SharedPreferences.getInstance();
-  userAgent = prefs.getString('user-agent') ?? userAgent;
-  for(var sps in shrPrefSwitches) await sps.init((){});
-}
-
 Future main() async {
+
+  //SharedPreferences prefs = await SharedPreferences.getInstance();
+  //await prefs.clear();
+  //return;
 
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -351,7 +43,7 @@ Future main() async {
         .setWebContentsDebuggingEnabled(true);
   }
 
-  initConfig();
+  await initConfig();
 
   for(var sps in shrPrefSwitches) sps.start?.call(sps);
 
@@ -405,6 +97,7 @@ class _MyAppState extends State<MyApp> {
         }
       },
     );
+    setStateStack.add(() {setState((){});});
   }
 
   @override
@@ -412,13 +105,14 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
-    setStateStack.add(() {setState((){});});
     return MaterialApp(
       theme: ThemeData(
         primaryColor: Colors.black,
       ),
       routes: {
         '/botSettings': (context) => BotSettingsRoute(),
+        '/userScripts': (context) => UserScriptsRoute(),
+        '/editScripts': (context) => EditScriptsRoute(),
       },
       home: Scaffold(
           appBar: AppBar(
@@ -452,43 +146,9 @@ class _MyAppState extends State<MyApp> {
                         },
                         initialUserScripts: UnmodifiableListView<UserScript>([
                           UserScript(
-                              source: '''
-                                  (function(){
-                                    let load = () => setTimeout(function(){
-                                      if(!window.\$) return load();
-                                      \$.origAjax = \$.ajax;
-                                      \$.ajax = function(...args){
-                                          if(window.autoMe
-                                          && typeof args[0].data == "string"
-                                          && args[0].data.includes("message=")
-                                          && args[0].data.match(/to=\$|to=&/))
-                                        args[0].data = args[0].data.replace("message=", "message=/me"),
-                                          \$("#talks").children()[0].remove();
-                                        return \$.origAjax.apply(\$, args);
-                                      }
-                                      if(location.href == "https://drrr.com/"){
-                                        //window.addEventListener(
-                                        //  "flutterInAppWebViewPlatformReady",
-                                        //  function(event) {
-                                        //     alert("bind");
-                                             \$('form').submit(function(){
-                                               window.flutter_inappwebview.callHandler(
-                                                 'login', \$('#form-name').val(),
-                                                 \$('.user-icon.active').attr('data-avatar'),
-                                                 \$('#form-language-select').val())
-                                                 .then(function(result) {
-                                                 console.log(result);
-                                               });
-                                               return false;
-                                             });
-                                        //  }
-                                        //);
-                                      }
-                                     }, 200);
-                                     load();
-
-                                   })();
-                                  ''',
+                              source: settingsCode(
+                                  Scripts.enabled((s) => s.code)
+                                         .cast<String>().join("\n")),
                               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END),
                           // UserScript(
                           //     source: "var bar = 2;",
@@ -543,6 +203,7 @@ class _MyAppState extends State<MyApp> {
                           });
                           shrPrefSwitches.forEach(
                                   (elt) => elt.ready?.call(this.webViewController, elt));
+                          controller.evaluateJavascript(source: "console.log('================================>', \$)");
                         },
                         onLoadError: (controller, url, code, message) {
                           pullToRefreshController.endRefreshing();
@@ -647,11 +308,8 @@ enum MenuOptions {
   listCache,
   clearCache,
   botSettings,
+  userScripts,
   about,
-}
-
-enum NoteID {
-  cancelKeepRoom,
 }
 
 class SampleMenu extends StatelessWidget {
@@ -691,6 +349,9 @@ class SampleMenu extends StatelessWidget {
               case MenuOptions.botSettings:
                 _onBotSettings(controller.data, context);
                 break;
+              case MenuOptions.userScripts:
+                _onUserScripts(controller.data, context);
+                break;
             }
           },
           itemBuilder: (BuildContext context) => <PopupMenuItem<MenuOptions>>[
@@ -721,7 +382,11 @@ class SampleMenu extends StatelessWidget {
             // ),
             const PopupMenuItem<MenuOptions>(
               value: MenuOptions.botSettings,
-              child: Text('Bot Settings'),
+              child: Text('Settings'),
+            ),
+            const PopupMenuItem<MenuOptions>(
+              value: MenuOptions.userScripts,
+              child: Text('User Scripts'),
             ),
             const PopupMenuItem<MenuOptions>(
               value: MenuOptions.about,
@@ -804,7 +469,16 @@ class SampleMenu extends StatelessWidget {
     Navigator.pushNamed(
       context,
       '/botSettings',
-      arguments: BotSettingsArgs(controller),
+      arguments: BotArgs(controller),
+    );
+  }
+
+  void _onUserScripts(InAppWebViewController? controller, BuildContext context) async {
+    // TODO modify this
+    Navigator.pushNamed(
+      context,
+      '/userScripts',
+      arguments: BotArgs(controller),
     );
   }
 
@@ -817,106 +491,6 @@ class SampleMenu extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.end,
       mainAxisSize: MainAxisSize.min,
       children: cookieWidgets.toList(),
-    );
-  }
-}
-
-/// This is the stateful widget that the main application instantiates.
-class BotSettingsRoute extends StatefulWidget {
-  const BotSettingsRoute({Key? key}) : super(key: key);
-
-  @override
-  State<BotSettingsRoute> createState() => _BotSettingsRouteState();
-}
-
-Future<bool> saveSwitchState(String key, bool value) async {
-  SharedPreferences prefs = await SharedPreferences.getInstance();
-  return prefs.setBool(key, value);
-}
-
-class BotSettingsArgs {
-  InAppWebViewController? webViewController;
-  BotSettingsArgs(this.webViewController);
-}
-
-/// This is the private State class that goes with MyStatefulWidget.
-class _BotSettingsRouteState extends State<BotSettingsRoute> {
-
-  InAppWebViewController? webViewController;
-
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  void commitView() {
-    setState((){});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-
-    setStateStack.add(() {setState((){});});
-
-    final args = ModalRoute.of(context)!.settings.arguments as BotSettingsArgs;
-    this.webViewController = args.webViewController;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Bot Settings"),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: 'Back to Dollars',
-          onPressed: () {
-            setStateStack.removeLast();
-            Navigator.pop(context);
-          },
-        )
-      ),
-      body: Column(
-        children:  [
-          ListTile(
-            leading: Icon(Icons.manage_accounts),
-            title: Text('User Agent'),
-            trailing: DropdownButton<String>(
-              hint:  Text("Select item"),
-              value: userAgent,
-              onChanged: (String? uaKey) async {
-                userAgent = uaKey ?? userAgent;
-                SharedPreferences prefs = await SharedPreferences.getInstance();
-                prefs.setString('user-agent', userAgent);
-                setState((){});
-              },
-              items: userAgentKeys.map((uaKey) {
-                return  DropdownMenuItem<String>(
-                  value: uaKey,
-                  child: Row(
-                    children: <Widget>[
-                      userAgents[uaKey]!,
-                      SizedBox(width: 10,),
-                      Text(
-                        uaKey,
-                        style:  TextStyle(color: Colors.black),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-          )
-        ].cast<Widget>() + shrPrefSwitches.map<Widget>(
-            (data) => SwitchListTile(
-                title: Text(data.title),
-                value: data.value,
-                onChanged: (bool value) {
-                  setState(() {
-                    data.onChanged(value, this.webViewController, data);
-                  });
-                },
-                secondary: data.icon
-            )
-        ).toList()
-      ),
     );
   }
 }
