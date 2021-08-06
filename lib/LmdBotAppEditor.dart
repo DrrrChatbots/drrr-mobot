@@ -33,7 +33,7 @@ var askEnable = (ctx, model, script, prefs) => AlertDialog(
 
 
 var askSave = (ctx, model, script) => AlertDialog(
-    title: Text("Do you want to save the code?"),
+    title: Text("Save the code?"),
     //content: Text("Do you really want to delete the script?"),
     actions: [
       TextButton(

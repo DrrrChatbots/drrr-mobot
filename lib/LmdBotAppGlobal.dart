@@ -522,10 +522,17 @@ var askReload = (ctx, controller) => AlertDialog(
       ),
       TextButton(
           onPressed: () async {
-            Navigator.pop(ctx);
-            controller.reload();
-            setStateStack.removeLast();
-            Navigator.pop(ctx);
+            try{
+              Navigator.pop(ctx);
+              controller.reload();
+              setStateStack.removeLast();
+              Navigator.pop(ctx);
+            }
+            on Exception catch (e) {
+              ScaffoldMessenger.of(ctx).showSnackBar(
+                SnackBar(content: Text("exc:" + e.toString())),
+              );
+            }
           },
           child: Text("Yes", style: TextStyle(color: Colors.green))
       ),
@@ -1169,17 +1176,19 @@ drrr.getReady(() => {
     if(!digits){
       do{ digits = String(Math.floor(1000 + Math.random() * 9000));
       } while(!valid(digits));
-      localStorage.setItem("GAME_GUESS_NUMBER", digits)
+      localStorage.setItem("GAME_GUESS_NUMBER", digits);
+      guess_number_answer = digits;
       callback && callback(digits, "random number set, game start");
       return "random number set, game start";
     }
     else if(valid(digits)){
-      localStorage.setItem("GAME_GUESS_NUMBER", digits)
+      localStorage.setItem("GAME_GUESS_NUMBER", digits);
+      guess_number_answer = digits;
       callback && callback(digits, "number set, game start")
       return "number set, game start";
     }
     else{
-      chrome.storage.sync.remove(GAME_GUESS_NUMBER);
+      localStorage.removeItem("GAME_GUESS_NUMBER")
       callback && callback('', `give me 4 different digits, you give me \${digits}`)
       return `give me 4 digits, you give me \${digits}`;
     }
@@ -1193,7 +1202,7 @@ drrr.getReady(() => {
         var a = g.map((v, idx)=>d[idx] === g[idx]).reduce((a, b)=>a+b);
         var b  = c - a;
         callback(a === 4 ? "Your Number is Correct" : `\${guess}: \${a}A\${b}B`);
-      } else callback("number not set yet, set number to start the game.");
+      } else callback("number not set yet,\\nset number to start the game.");
     } else callback(`guess number must be 4 non-repeat digits: \${guess}`);
   }
   plugin_hooks.push(plugin_guess_game);

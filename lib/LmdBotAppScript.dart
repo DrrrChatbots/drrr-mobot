@@ -135,20 +135,32 @@ class _UserScriptsRouteState extends State<UserScriptsRoute> {
                     IconButton(
                       icon: const Icon(Icons.get_app),
                       onPressed: () async {
-                        FilePickerResult? result = await FilePicker.platform.pickFiles(
-                          type: FileType.custom,
-                          allowedExtensions: ['js'],
-                        );
-                        if(result != null && result.files.single.path != null) {
-                          File file = File(result.files.single.path!);
-                          file.readAsString().then((String contents) {
-                            Scripts.push(basename(result.files.single.path!), contents);
-                            setState((){});
-                          });
+                        FilePickerResult? result;
+                        try {
+                          result = await FilePicker.platform.pickFiles(
+                            //type: FileType.custom,
+                            //allowedExtensions: ['js'],
+                          );
                         }
-                        //ScaffoldMessenger.of(context).showSnackBar(
-                        //  const SnackBar(content: Text("To be continued...")),
-                        //);
+                        on Exception catch (e) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text("Unsupported operation" + e.toString())),
+                          );
+                        }
+                        if(result != null && result.files.single.path != null) {
+                          if(result.files.single.path!.endsWith(".js")){
+                            File file = File(result.files.single.path!);
+                            file.readAsString().then((String contents) {
+                              Scripts.push(basename(result!.files.single.path!), contents);
+                              setState((){});
+                            });
+                          } else ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: const Text("Please select a javascript file")),
+                          );
+                        }
+                        else ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: const Text("No script file selected")),
+                        );
                       },
                     ),
                     IconButton(
