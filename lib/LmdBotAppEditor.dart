@@ -57,6 +57,7 @@ var askSave = (ctx, model, script) => AlertDialog(
             if(script.enable){
               Navigator.pop(ctx);
               setStateStack.removeLast();
+              setStateStack.last();
             }
             else{
               showDialog(

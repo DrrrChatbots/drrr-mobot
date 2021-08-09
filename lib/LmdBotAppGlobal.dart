@@ -47,7 +47,7 @@ class BotClient extends http.BaseClient {
   Future<http.Response> doPost(url, cookie, body) async {
     Map<String, String> headers = {
       'user-agent': userAgent,
-      'cookie': cookie ?? this.cookie ?? '',
+      'cookie': cookie ?? '',
       'Content-Type': 'application/x-www-form-urlencoded',
     };
     return _inner.post(url, headers: headers, body: body);
@@ -56,14 +56,13 @@ class BotClient extends http.BaseClient {
   Future<http.Response> doGet(url, cookie) async {
     Map<String, String> headers = {
       'user-agent': userAgent,
-      'cookie': cookie ?? this.cookie ?? '',
+      'cookie': cookie ?? '',
       'Content-Type': 'application/x-www-form-urlencoded',
     };
     return _inner.get(url, headers: headers);
   }
 
-  Future<void> doLoad() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
+  void doLoad(prefs) async {
     this.id = prefs.getString('id') ?? '';
     this.cookie = prefs.getString('cookie') ?? '';
   }
@@ -86,18 +85,20 @@ String getCookie(str){
 void doLogin(name, avatar, lang, controller) async {
 
   var url = Uri.parse('https://drrr.com/?api=json');
+  botClient.cookie = "";
   var res = await botClient.doGet(url, null);
   var token = json.decode(res.body)['token'];
+  var cookieString = res.headers['Set-Cookie'] ??
+      res.headers['set-cookie'] ?? '';
 
-  var cookieRaw = getCookie(res.headers['Set-Cookie'] ??
-      res.headers['set-cookie'] ?? '') ;
+  var cookieRaw = getCookie(cookieString) ;
 
   Map<String, String> bodyFields = {
     'name': name, 'login': 'ENTER',
     'token': token, 'language': lang, 'icon': avatar,
   };
 
-  var resp = await botClient.doPost( url, cookieRaw, bodyFields, );
+  var resp = await botClient.doPost(url, cookieRaw, bodyFields);
 
   cookieRaw = resp.headers['Set-Cookie'] ??
       resp.headers['set-cookie'] ?? '';
@@ -118,7 +119,7 @@ void doLogin(name, avatar, lang, controller) async {
   );
 
   controller?.reload();
-  res = await botClient.doGet(Uri.parse('https://drrr.com/profile/?api=json'), null);
+  res = await botClient.doGet(Uri.parse('https://drrr.com/profile/?api=json'), botClient.cookie);
   botClient.id = json.decode(res.body)['profile']['id'];
   await botClient.doSave();
 }
@@ -138,7 +139,6 @@ class Script {
   var _order = 0;
   var _enable = false;
   var _code = "";
-  var changed = false;
 
   int get index => this._index;
   int get order => this._order;
@@ -147,19 +147,19 @@ class Script {
   String get code => this._code;
 
   void setOrder(prefs, val){
-    this.changed = true;
+    if(this._enable) Scripts.changed = true;
     this._order = val;
     prefs.setInt("USO${this._index}", order);
   }
 
   void setCode(prefs, val){
-    this.changed = true;
+    if(this._enable) Scripts.changed = true;
     this._code = val;
     prefs.setString("USC${this._index}", val);
   }
 
   void setEnable(prefs, value){
-    this.changed = true;
+    Scripts.changed = true;
     this._enable = value;
     prefs.setBool("USE${this._index}", value);
   }
@@ -171,12 +171,11 @@ class Script {
 
   Script.create(this._index, this._name,
       this._order, this._enable, this._code, prefs){
-    this.changed = false;
+    if(this._enable) Scripts.changed = true;
     save(prefs);
   }
 
   Script.load(prefs, idx){
-    this.changed = false;
     this._index = idx;
     this._name = prefs.getString("USN$idx") ?? "no name";
     this._order = prefs.getInt("USO$idx") ?? idx;
@@ -198,6 +197,7 @@ class Script {
   }
 
   void delete(prefs) {
+    if(this._enable) Scripts.changed = true;
     prefs.remove("USN${this._index}");
     prefs.remove("USO${this._index}");
     prefs.remove("USE${this._index}");
@@ -218,6 +218,7 @@ class Scripts {
   // USO<Number> -- user script order
   // USC<Number> -- user script code
   static List<Script>? metaList;
+  static bool changed = false;
 
   static init(SharedPreferences prefs) {
     if (metaList != null) return metaList;
@@ -282,19 +283,24 @@ class Scripts {
         .map(callback).toList();
   }
 
-  static List enabled(callback){
+  static List forEnabled(callback){
     return sortedRidx(metaList!.map((e) => e.order))
         .map((idx) => metaList![idx])
         .where((script)=> script.enable)
         .map(callback).toList();
   }
 
+  static String enabledMergedCode(){
+    changed = false;
+    return forEnabled((s) => s.code).cast<String>().join("\n");
+  }
+
   static bool isChanged() {
-    return metaList!.any((s) => s.changed);
+    return changed;
   }
 
   static void setUnchanged(){
-    metaList!.forEach((s) => s.changed = false);
+    changed = false;
   }
 }
 // end scripts
@@ -390,6 +396,7 @@ Future initConfig() async {
   userAgent = prefs.getString('user-agent') ?? userAgent;
   for(var sps in shrPrefSwitches) await sps.init(prefs, (){});
   Scripts.init(prefs);
+  botClient.doLoad(prefs);
 }
 
 // end shared preferences
@@ -451,7 +458,7 @@ void stop() {
 
 void runTimer() async {
 
-  initConfig();
+  await initConfig();
 
   flutterLocalNotificationsPlugin.initialize(
       flutterInitSettings,
@@ -471,8 +478,6 @@ void runTimer() async {
   final hClient = http.Client();
   final BotClient botClient = BotClient(hClient);
 
-  await botClient.doLoad();
-
   var keep = assocSPS(ShrPrefKey.keepRoom).value;
   // option 1
   if(keep && counter % 10 == 9){
@@ -482,15 +487,13 @@ void runTimer() async {
     };
     await botClient.doPost(
         Uri.parse("https://drrr.com/room/?ajax=1&api=json"),
-        null, bodyFields);
+        botClient.cookie, bodyFields);
   }
   else{
     // option 2
     var url = 'https://drrr.com/json.php?update=$update';
     var res = await botClient.doGet(
-        Uri.parse(url), null);
-    print(url);
-    print(res.body);
+        Uri.parse(url), botClient.cookie);
     var upd = json.decode(res.body)['update'];
     update = upd == null ? update : upd.floor().toString();
   }
@@ -509,8 +512,8 @@ void runTimer() async {
 // }
 
 var askReload = (ctx, controller) => AlertDialog(
-    title: Text("Script changed, reload?"),
-    //content: Text("Do you really want to delete the script?"),
+    title: Text("Script changed"),
+    content: Text("Reload scripts and webpage?"),
     actions: [
       TextButton(
           onPressed: () async {
@@ -522,6 +525,12 @@ var askReload = (ctx, controller) => AlertDialog(
       ),
       TextButton(
           onPressed: () async {
+            Scripts.setUnchanged();
+            controller!.removeAllUserScripts();
+            controller.addUserScript(userScript: UserScript(
+                source: settingsCode(
+                    Scripts.enabledMergedCode()),
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END));
             try{
               Navigator.pop(ctx);
               controller.reload();
@@ -559,33 +568,48 @@ var settingsCode = (customCode) => '''
         } 
         return \$.origAjax.apply(\$, args);
       }
-      if(location.href == "https://drrr.com/"){
-        window.addEventListener(
-          "flutterInAppWebViewPlatformReady",
-          function(event) {
-             alert("bind");
-             \$('form').submit(function(){
-               window.flutter_inappwebview.callHandler(
-                 'login', \$('#form-name').val(),
-                 \$('.user-icon.active').attr('data-avatar'),
-                 \$('#form-language-select').val())
-                 .then(function(result) {
-                 console.log(result);
-               });
-               return false;
-             });
-          }
-        );
+      let flutter_bind = false;
+      let bind_listener = index => {
+        console.log(`======> bind listener at \${index}`);
+        if(location.href == "https://drrr.com/"){
+          \$('form').submit(function(){
+            window.flutter_inappwebview.callHandler(
+              'login', \$('#form-name').val(),
+              \$('.user-icon.active').attr('data-avatar'),
+              \$('#form-language-select').val())
+              .then(function(result) {
+              console.log(result);
+            });
+            return false;
+          }); 
+        }
+        try{
+          $customCode
+        }
+        catch(e){
+          window.flutter_inappwebview.callHandler(
+            'exception', e.toString())
+            .then(function(result) {
+            console.log("UserScriptException: " + e.toString());
+          });
+        }
       }
-      $customCode
+      window.addEventListener(
+        "flutterInAppWebViewPlatformReady",
+        function(event) {
+          if(flutter_bind) return console.log("have already bind");
+          bind_listener(1);
+        }
+      );
+      if(window.flutter_inappwebview) bind_listener(0);
+      // customCode here originally
     }, 200);
     load();
    })();
   ''';
 
 var builtin = {
-  'hook.js': '''
-  var [event_me, event_music, event_leave, event_join, event_newhost, event_msg, event_dm, event_dmto, event_newtab, event_exittab, event_exitalarm, event_logout, event_musicbeg, event_musicend, event_timer, event_clock, event_kick, event_ban, event_unban, event_roll, event_roomprofile, event_roomdesc, event_timeout, event_lounge] = ["me", "music", "leave", "join", "new-host", "msg", "dm", "dmto", "newtab", "exittab", "exitalarm", "logout", "musicbeg", "musicend", "timer", "clock", "kick", "ban", "unban", "roll", "room-profile", "new-description", "timeout", "lounge"];
+  'hook.js': '''var [event_me, event_music, event_leave, event_join, event_newhost, event_msg, event_dm, event_dmto, event_newtab, event_exittab, event_exitalarm, event_logout, event_musicbeg, event_musicend, event_timer, event_clock, event_kick, event_ban, event_unban, event_roll, event_roomprofile, event_roomdesc, event_timeout, event_lounge] = ["me", "music", "leave", "join", "new-host", "msg", "dm", "dmto", "newtab", "exittab", "exitalarm", "logout", "musicbeg", "musicend", "timer", "clock", "kick", "ban", "unban", "roll", "room-profile", "new-description", "timeout", "lounge"];
 event_events = [event_me      , event_music   , event_leave   , event_join    , event_newhost , event_msg     , event_dm      , event_dmto    ,/* event_logout  , */event_musicbeg , event_musicend, /*event_timer, event_clock, */event_kick, event_ban, event_unban, event_roll, event_roomprofile, event_roomdesc, event_lounge, event_newtab, "*"]
 
 var plugin_hooks = []

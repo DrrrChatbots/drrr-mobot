@@ -2,17 +2,12 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 import 'dart:core';
-import 'dart:math';
-import 'dart:isolate';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart' hide Cookie;
 import 'package:url_launcher/url_launcher.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/retry.dart';
+import 'package:flutter/services.dart';
 import 'LmdBotAppSetting.dart';
 import 'LmdBotAppEditor.dart';
 import 'LmdBotAppGlobal.dart';
@@ -58,6 +53,7 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
 
   final GlobalKey webViewKey = GlobalKey();
+  final _messangerKey = GlobalKey<ScaffoldMessengerState>();
 
   InAppWebViewController? webViewController;
   final Completer<InAppWebViewController>
@@ -106,6 +102,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: _messangerKey,
       theme: ThemeData(
         primaryColor: Colors.black,
       ),
@@ -147,8 +144,7 @@ class _MyAppState extends State<MyApp> {
                         initialUserScripts: UnmodifiableListView<UserScript>([
                           UserScript(
                               source: settingsCode(
-                                  Scripts.enabled((s) => s.code)
-                                         .cast<String>().join("\n")),
+                                  Scripts.enabledMergedCode()),
                               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END),
                           // UserScript(
                           //     source: "var bar = 2;",
@@ -158,9 +154,18 @@ class _MyAppState extends State<MyApp> {
                           controller.addJavaScriptHandler(
                               handlerName: 'login',
                               callback: (args) => {
+                                print("===================> do login"),
                                 doLogin(args[0], args[1], args[2], controller),
                                 jsonEncode("done")
-                        });
+                          });
+                          controller.addJavaScriptHandler(
+                              handlerName: 'exception',
+                              callback: (args) => {
+                                print("===================> show exception"),
+                                _messangerKey.currentState!.showSnackBar(
+                                  SnackBar(content: Text(args[0]))),
+                                jsonEncode("reported")
+                          });
                           setState(() {
                             this.url = url.toString();
                             urlController.text = this.url;
@@ -309,6 +314,7 @@ enum MenuOptions {
   clearCache,
   botSettings,
   userScripts,
+  copySession,
   about,
 }
 
@@ -328,6 +334,9 @@ class SampleMenu extends StatelessWidget {
         return PopupMenuButton<MenuOptions>(
           onSelected: (MenuOptions value) {
             switch (value) {
+              case MenuOptions.copySession:
+                _onCopySession(context);
+                break;
               case MenuOptions.about:
                 _onAbout(context);
                 break;
@@ -389,6 +398,10 @@ class SampleMenu extends StatelessWidget {
               child: Text('User Scripts'),
             ),
             const PopupMenuItem<MenuOptions>(
+              value: MenuOptions.copySession,
+              child: Text('Copy Session'),
+            ),
+            const PopupMenuItem<MenuOptions>(
               value: MenuOptions.about,
               child: Text('About Developer'),
             ),
@@ -415,6 +428,26 @@ class SampleMenu extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           const Text('lambda.catノ#L/CaT//Hsk\na.k.a 浪打貓ノ，也有人叫我蘭達\n約於 2017 秋開始出沒於 drrr.com。\nmail: lambdacat.tw@gmail.com\n'),
+        ],
+      ),
+    ));
+  }
+
+  void _onCopySession(BuildContext context) async {
+    // Send a message with the user agent string to the Toaster JavaScript channel we registered
+    // with the WebView.
+    var cookie = 'No session, login first';
+    if(botClient.cookie.length != 0){
+      cookie = botClient.cookie;
+      Clipboard.setData(ClipboardData(text: cookie));
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text('Session: $cookie'),
         ],
       ),
     ));

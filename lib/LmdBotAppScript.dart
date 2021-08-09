@@ -74,13 +74,6 @@ var askRename = (ctx, script, valueText, _textFieldController, setState) =>
 
 void onExit(context, webViewController){
   if(Scripts.isChanged()){
-    Scripts.setUnchanged();
-    webViewController!.removeAllUserScripts();
-    webViewController.addUserScript(userScript: UserScript(
-        source: settingsCode(
-            Scripts.enabled((s) => s.code)
-                .cast<String>().join("\n")),
-        injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END));
     showDialog(
         context: context,
         builder: (BuildContext context) => askReload(context, webViewController)
@@ -132,6 +125,25 @@ class _UserScriptsRouteState extends State<UserScriptsRoute> {
             actions: <Widget>[
               Row(
                   children: <Widget>[
+                    IconButton(
+                      icon: Icon(
+                        Icons.autorenew,
+                        color: Scripts.isChanged() ? Colors.blue.shade400 : null,
+                      ),
+                      onPressed: () async {
+                        Scripts.setUnchanged();
+                        webViewController!.removeAllUserScripts();
+                        webViewController!.addUserScript(userScript: UserScript(
+                            source: settingsCode(
+                                Scripts.enabledMergedCode()),
+                            injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END));
+                        webViewController!.reload();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: const Text("Scripts Force Reloaded!")),
+                        );
+                        setState((){});
+                      },
+                    ),
                     IconButton(
                       icon: const Icon(Icons.get_app),
                       onPressed: () async {
@@ -188,17 +200,20 @@ class _UserScriptsRouteState extends State<UserScriptsRoute> {
             var lower = min(oldIndex, newIndex);
             print("$oldIndex, $newIndex");
             SharedPreferences prefs = await SharedPreferences.getInstance();
+            bool selfEnabled = false;
+            bool anyOtherEnabled = false;
             for(var i = 0; i < Scripts.metaList!.length; i++){
               var e = Scripts.metaList![i];
-              if(e.order == oldIndex)
+              if(e.order == oldIndex){
                 e.setOrder(prefs, update);
-              else if(e.order > lower - 1 && e.order <= upper)
+                selfEnabled = e.enable;
+              }
+              else if(e.order > lower - 1 && e.order <= upper){
                 e.setOrder(prefs, e.order + 1 - inc * 2);
+                anyOtherEnabled |= e.enable;
+              }
             }
-            //for(var i = 0; i < Scripts.metaList!.length; i++) {
-            //  var e = Scripts.metaList![i];
-            //  print("$i => ${e.order}");
-            //}
+            if(!selfEnabled || !anyOtherEnabled) Scripts.setUnchanged();
             setState((){});
           },
           children: Scripts.ordered((script){
