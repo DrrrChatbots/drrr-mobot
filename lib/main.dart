@@ -5,13 +5,15 @@ import 'dart:core';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart' hide Cookie;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:flutter/services.dart';
-import 'LmdBotAppSetting.dart';
 import 'LmdBotAppEditor.dart';
 import 'LmdBotAppGlobal.dart';
+import 'LmdBotAppSetting.dart';
 import 'LmdBotAppScript.dart';
+import 'LmdBotAppSession.dart';
 
 // icon
 // https://fonts.google.com/icons?selected=Material+Icons
@@ -109,6 +111,7 @@ class _MyAppState extends State<MyApp> {
       routes: {
         '/botSettings': (context) => BotSettingsRoute(),
         '/userScripts': (context) => UserScriptsRoute(),
+        '/userSessions': (context) => UserSessionsRoute(),
         '/editScripts': (context) => EditScriptsRoute(),
       },
       home: Scaffold(
@@ -150,12 +153,12 @@ class _MyAppState extends State<MyApp> {
                           //     source: "var bar = 2;",
                           //     injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END),
                         ]),
-                        onLoadStart: (controller, url) {
+                        onLoadStart: (controller, url) async {
                           controller.addJavaScriptHandler(
                               handlerName: 'login',
                               callback: (args) => {
                                 print("===================> do login"),
-                                doLogin(args[0], args[1], args[2], controller),
+                                doLogin(args[0], args[1], args[2], controller, context),
                                 jsonEncode("done")
                           });
                           controller.addJavaScriptHandler(
@@ -314,7 +317,9 @@ enum MenuOptions {
   clearCache,
   botSettings,
   userScripts,
+  userSessions,
   copySession,
+  pasteSession,
   about,
 }
 
@@ -323,7 +328,7 @@ class SampleMenu extends StatelessWidget {
   SampleMenu(this.controller);
 
   final Future<InAppWebViewController> controller;
-  // final CookieManager cookieManager = CookieManager();
+
 
   @override
   Widget build(BuildContext context) {
@@ -336,6 +341,9 @@ class SampleMenu extends StatelessWidget {
             switch (value) {
               case MenuOptions.copySession:
                 _onCopySession(context);
+                break;
+              case MenuOptions.pasteSession:
+                _onPasteSession(controller.data, context);
                 break;
               case MenuOptions.about:
                 _onAbout(context);
@@ -361,6 +369,8 @@ class SampleMenu extends StatelessWidget {
               case MenuOptions.userScripts:
                 _onUserScripts(controller.data, context);
                 break;
+              case MenuOptions.userSessions:
+                _onUserSessions(controller.data, context);
             }
           },
           itemBuilder: (BuildContext context) => <PopupMenuItem<MenuOptions>>[
@@ -390,17 +400,25 @@ class SampleMenu extends StatelessWidget {
             //   child: Text('Clear cache'),
             // ),
             const PopupMenuItem<MenuOptions>(
+              value: MenuOptions.userScripts,
+              child: Text('Scripts'),
+            ),
+            const PopupMenuItem<MenuOptions>(
               value: MenuOptions.botSettings,
               child: Text('Settings'),
             ),
             const PopupMenuItem<MenuOptions>(
-              value: MenuOptions.userScripts,
-              child: Text('User Scripts'),
+              value: MenuOptions.userSessions,
+              child: Text('Sessions'),
             ),
-            const PopupMenuItem<MenuOptions>(
-              value: MenuOptions.copySession,
-              child: Text('Copy Session'),
-            ),
+            // const PopupMenuItem<MenuOptions>(
+            //   value: MenuOptions.copySession,
+            //   child: Text('Copy Session'),
+            // ),
+            // const PopupMenuItem<MenuOptions>(
+            //   value: MenuOptions.pasteSession,
+            //   child: Text('Paste Session'),
+            // ),
             const PopupMenuItem<MenuOptions>(
               value: MenuOptions.about,
               child: Text('About Developer'),
@@ -438,7 +456,7 @@ class SampleMenu extends StatelessWidget {
     // with the WebView.
     var cookie = 'No session, login first';
     if(botClient.cookie.length != 0){
-      cookie = botClient.cookie;
+      cookie = sessionCookieValue(botClient.cookie);
       Clipboard.setData(ClipboardData(text: cookie));
     }
 
@@ -448,6 +466,65 @@ class SampleMenu extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text('Session: $cookie'),
+        ],
+      ),
+    ));
+  }
+
+  void _onPasteSession(InAppWebViewController? controller, BuildContext context) async {
+    // Send a message with the user agent string to the Toaster JavaScript channel we registered
+    // with the WebView.
+    var cookie = 'No session, login first';
+    ClipboardData? data = await Clipboard.getData('text/plain');
+    final _textFieldController = TextEditingController();
+    // if(botClient.cookie.length != 0){
+    //   cookie = botClient.cookie;
+    //   Clipboard.setData(ClipboardData(text: cookie));
+    // }
+    showDialog(
+        context: context,
+        builder: (BuildContext context){
+          var valueText = "";
+          return AlertDialog(
+            title: Text('Input new session'),
+            content: TextField(
+              autofocus: true,
+              onChanged: (value) {
+                //setState(() {
+                valueText = value;
+                //});
+              },
+              controller: _textFieldController..text = '$valueText',
+              decoration: InputDecoration(hintText: "drrr-session-1="),
+            ),
+            actions: <Widget>[
+              TextButton(
+                  onPressed: () async {
+                    _textFieldController.text = "";
+                    Navigator.pop(context);
+                  },
+                  child: Text("Cancel", style: TextStyle(color: Colors.red))
+              ),
+              TextButton(
+                  onPressed: () async {
+                    await botClient.doLoadCookie(
+                        sessionCookie(_textFieldController.text),
+                        controller, true, context);
+                    Navigator.pop(context);
+                  },
+                  child: Text("Paste", style: TextStyle(color: Colors.green))
+              ),
+            ],
+          );
+        }
+    );
+
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text('Not impl yet'),
         ],
       ),
     ));
@@ -511,6 +588,15 @@ class SampleMenu extends StatelessWidget {
     Navigator.pushNamed(
       context,
       '/userScripts',
+      arguments: BotArgs(controller),
+    );
+  }
+
+  void _onUserSessions(InAppWebViewController? controller, BuildContext context) async {
+    // TODO modify this
+    Navigator.pushNamed(
+      context,
+      '/userSessions',
       arguments: BotArgs(controller),
     );
   }

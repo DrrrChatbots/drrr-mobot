@@ -31,7 +31,8 @@ class _BotSettingsRouteState extends State<BotSettingsRoute> {
 
     return Scaffold(
       appBar: AppBar(
-          title: const Text("Settings"),
+          // title: const Text("Settings"),
+          title: const Icon(Icons.settings_applications),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             tooltip: 'Back to Dollars',

@@ -114,7 +114,8 @@ class _UserScriptsRouteState extends State<UserScriptsRoute> {
         },
         child: Scaffold(
         appBar: AppBar(
-            title: const Text("Scripts"),
+            // title: const Text("Scripts"),
+            title: const Icon(Icons.code),
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
               tooltip: 'Back to Dollars',

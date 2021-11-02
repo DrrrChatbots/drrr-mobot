@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:core';
 import 'dart:convert';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart' hide Cookie;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,6 +10,10 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/retry.dart';
+
+String capitalize(String str) {
+  return str.length == 0 ? "" : "${str[0].toUpperCase()}${str.substring(1)}";
+}
 
 CookieManager cookieManager = CookieManager.instance();
 List<void Function()> setStateStack = [];
@@ -24,6 +29,16 @@ class ScriptArgs {
 }
 
 // beg http
+
+String sessionCookieValue(cookie){
+  return cookie.replaceAll("drrr-session-1=", "")
+               .replaceAll(";", "");
+}
+
+String sessionCookie(cookieValue){
+  return "drrr-session-1=$cookieValue;";
+}
+
 var userAgent = "Mobile";
 const Map<String, Icon> userAgents = const {
   'Bot': const Icon(Icons.build),
@@ -34,8 +49,43 @@ const Map<String, Icon> userAgents = const {
 };
 var userAgentKeys = userAgents.entries.map((u) => u.key);
 
+const Map<String, Image> userIcons = const {
+  'bakyura-2x': const Image(image: AssetImage('icons/bakyura-2x.png')),
+  'bakyura':    const Image(image: AssetImage('icons/bakyura.png')),
+  'eight':      const Image(image: AssetImage('icons/eight.png')),
+  'gaki-2x':    const Image(image: AssetImage('icons/gaki-2x.png')),
+  'gg':         const Image(image: AssetImage('icons/gg.png')),
+  'junsui-2x':  const Image(image: AssetImage('icons/junsui-2x.png')),
+  'kakka':      const Image(image: AssetImage('icons/kakka.png')),
+  'kanra-2x':   const Image(image: AssetImage('icons/kanra-2x.png')),
+  'kanra':      const Image(image: AssetImage('icons/kanra.png')),
+  'kuromu-2x':  const Image(image: AssetImage('icons/kuromu-2x.png')),
+  'kyo-2x':     const Image(image: AssetImage('icons/kyo-2x.png')),
+  'rotchi-2x':  const Image(image: AssetImage('icons/rotchi-2x.png')),
+  'saki-2x':    const Image(image: AssetImage('icons/saki-2x.png')),
+  'san-2x':     const Image(image: AssetImage('icons/san-2x.png')),
+  'setton-2x':  const Image(image: AssetImage('icons/setton-2x.png')),
+  'setton':     const Image(image: AssetImage('icons/setton.png')),
+  'sharo-2x':   const Image(image: AssetImage('icons/sharo-2x.png')),
+  'tanaka-2x':  const Image(image: AssetImage('icons/tanaka-2x.png')),
+  'tanaka':     const Image(image: AssetImage('icons/tanaka.png')),
+  'ya-2x':      const Image(image: AssetImage('icons/ya-2x.png')),
+  'zaika-2x':   const Image(image: AssetImage('icons/zaika-2x.png')),
+  'zaika':      const Image(image: AssetImage('icons/zaika.png')),
+  'zawa':       const Image(image: AssetImage('icons/zawa.png')),
+};
+
+
+getDeviceIcon(device){
+  return userAgents[capitalize(device)] ?? const Icon(Icons.account_circle);
+}
+
+getIcon(icon){
+  return userIcons[icon] ?? const Image(image: AssetImage('icons/zawa.png'));
+}
+
 class BotClient extends http.BaseClient {
-  String cookie = '', id = '';
+  String cookie = '', id = '', name = '', icon = '', device = '';
   final http.Client _inner;
   BotClient(this._inner);
 
@@ -64,13 +114,91 @@ class BotClient extends http.BaseClient {
 
   void doLoad(prefs) async {
     this.id = prefs.getString('id') ?? '';
+    this.name = prefs.getString('name') ?? '';
+    this.icon = prefs.getString('icon') ?? '';
+    this.device = prefs.getString('device') ?? '';
     this.cookie = prefs.getString('cookie') ?? '';
+  }
+
+  Future<void> doClear(controller) async {
+    this.id = '';
+    this.name = '';
+    this.icon = '';
+    this.device = '';
+    this.cookie = '';
+    await this.doSave();
+    await cookieManager.deleteCookie(
+        url: Uri.parse('https://drrr.com/'),
+        name: 'drrr-session-1');
+    controller?.loadUrl(
+        urlRequest: URLRequest(url: Uri.parse("https://drrr.com")));
+  }
+
+  Future<void> setWebviewCookie(InAppWebViewController? controller) async {
+    await cookieManager.setCookie(
+        url: Uri.parse('https://drrr.com/'),
+        name: 'drrr-session-1',
+        value: sessionCookieValue(this.cookie),
+        domain: '.drrr.com',
+        path: '/',
+        isSecure: false,
+        isHttpOnly: true,
+        iosBelow11WebViewController: controller
+    );
+    await controller?.loadUrl(
+        urlRequest: URLRequest(url: Uri.parse("https://drrr.com")));
   }
 
   Future<void> doSave() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     prefs.setString("id", this.id);
+    prefs.setString("name", this.name);
+    prefs.setString("icon", this.icon);
+    prefs.setString("device", this.device);
     prefs.setString("cookie", this.cookie);
+  }
+
+  Future<bool> updateID(context, controller) async {
+    var res = await this.doGet(Uri.parse('https://drrr.com/profile/?api=json'), this.cookie);
+    try{
+      this.id = json.decode(res.body)['profile']['id'];
+      this.name = json.decode(res.body)['profile']['name'];
+      this.icon = json.decode(res.body)['profile']['icon'];
+      this.device = json.decode(res.body)['profile']['device'];
+      return true;
+    }
+    catch(err){
+      print(res.body);
+      var message = 'Login failed, cannot get profile ${res.body}';
+      this.doClear(controller);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+      return false;
+    }
+  }
+
+  void appendToSessions(){
+    if(!Sessions.existSession(this.cookie))
+      Sessions.push(this.id, this.name,
+          this.icon, this.device, this.cookie);
+  }
+
+  Future<bool> doLoadCookie(cookie, controller, keepOld, context) async {
+    if(keepOld) this.appendToSessions();
+    var oldCookie = cookie;
+    this.cookie = cookie;
+    var val = await this.updateID(context, controller);
+    if(val) {
+      await this.doSave();
+      await this.setWebviewCookie(controller);
+      return true;
+    }
+    else if(this.cookie.length != 0 && this.cookie != oldCookie){
+      this.cookie = oldCookie;
+      await this.updateID(context, controller);
+    }
+    return false;
   }
 }
 
@@ -82,7 +210,7 @@ String getCookie(str){
   return '${cookie.name}=${cookie.value};';
 }
 
-void doLogin(name, avatar, lang, controller) async {
+void doLogin(name, avatar, lang, controller, context) async {
 
   var url = Uri.parse('https://drrr.com/?api=json');
   botClient.cookie = "";
@@ -104,24 +232,9 @@ void doLogin(name, avatar, lang, controller) async {
       resp.headers['set-cookie'] ?? '';
 
   botClient.cookie = getCookie(cookieRaw);
-
-  var cookie = Cookie.fromSetCookieValue(cookieRaw);
-
-  cookieManager.setCookie(
-      url: Uri.parse('https://drrr.com/'),
-      name: cookie.name,
-      value: cookie.value,
-      domain: cookie.domain,
-      path: cookie.path ?? '',
-      isSecure: cookie.secure,
-      isHttpOnly: cookie.httpOnly,
-      iosBelow11WebViewController: controller
-  );
-
-  controller?.reload();
-  res = await botClient.doGet(Uri.parse('https://drrr.com/profile/?api=json'), botClient.cookie);
-  botClient.id = json.decode(res.body)['profile']['id'];
-  await botClient.doSave();
+  await botClient.setWebviewCookie(controller);
+  var val = await botClient.updateID(context, controller);
+  if(val) await botClient.doSave();
 }
 // end http
 
@@ -205,10 +318,10 @@ class Script {
   }
 }
 
-List<int> sortedRidx(list) {
+List<int> sortedRidx(list, metaList) {
   list = list.toList();
   var revMap = list.asMap().map((i, v) => MapEntry(v, i));
-  return [for(var i = 0; i < Scripts.metaList!.length; i++) revMap[i] ?? 0];
+  return [for(var i = 0; i < metaList!.length; i++) revMap[i] ?? 0];
 }
 
 class Scripts {
@@ -278,13 +391,13 @@ class Scripts {
   }
 
   static ordered(callback){
-    return sortedRidx(metaList!.map((e) => e.order))
+    return sortedRidx(metaList!.map((e) => e.order), metaList)
         .map((idx) => metaList![idx])
         .map(callback).toList();
   }
 
   static List forEnabled(callback){
-    return sortedRidx(metaList!.map((e) => e.order))
+    return sortedRidx(metaList!.map((e) => e.order), metaList)
         .map((idx) => metaList![idx])
         .where((script)=> script.enable)
         .map(callback).toList();
@@ -304,6 +417,161 @@ class Scripts {
   }
 }
 // end scripts
+
+// beg sessions
+class Session {
+  // SS# -- session #
+  // SSI<Number> -- session id
+  // SSN<Number> -- session name
+  // SSP<Number> -- session icon
+  // SSD<Number> -- session device
+  // SSC<Number> -- session cookie
+  // SSO<Number> -- user script order
+
+  var _index = 0;
+  var _id = "";
+  var _name = "";
+  var _icon = "";
+  var _device = "";
+  var _order = 0;
+  var _code = "";
+
+  int get index => this._index;
+  int get order => this._order;
+  String get id => this._id;
+  String get name => this._name;
+  String get icon => this._icon;
+  String get device => this._device;
+  String get code => this._code;
+
+  Future<void> replace(id, name, icon, device, code) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    prefs.setString("SSI${this._index}", id);
+    prefs.setString("SSN${this._index}", name);
+    prefs.setString("SSP${this._index}", icon);
+    prefs.setString("SSD${this._index}", device);
+    prefs.setString("SSC${this._index}", code);
+  }
+
+  void setOrder(prefs, val){
+    this._order = val;
+    prefs.setInt("SSO${this._index}", order);
+  }
+
+  void setCode(prefs, val){
+    this._code = val;
+    prefs.setString("SSC${this._index}", val);
+  }
+
+  void rename(prefs, name){
+    this._name = name;
+    prefs.setString("SSN${this._index}", name);
+  }
+
+  Session.create(this._index, this._id, this._name, this._icon, this._device,
+      this._order, this._code, prefs){
+    save(prefs);
+  }
+
+  Session.load(prefs, idx){
+    this._index = idx;
+    this._name = prefs.getString("SSI$idx") ?? "id";
+    this._name = prefs.getString("SSN$idx") ?? "no name";
+    this._icon = prefs.getString("SSP$idx") ?? "no icon";
+    this._device = prefs.getString("SSD$idx") ?? "no device";
+    this._order = prefs.getInt("SSO$idx") ?? idx;
+    this._code = prefs.getString("SSC$idx") ?? "no cookie";
+  }
+
+  void saveTo(prefs, idx, del){
+    prefs.setString("SSI$idx", this._id);
+    prefs.setString("SSN$idx", this._name);
+    prefs.setString("SSP$idx", this._icon);
+    prefs.setString("SSD$idx", this._device);
+    prefs.setString("SSC$idx", this._code);
+    prefs.setInt("SSO$idx", this._order);
+    if(del) this.delete(prefs);
+    this._index = idx;
+  }
+
+  void save(prefs){
+    saveTo(prefs, this._index, false);
+  }
+
+  void delete(prefs) {
+    prefs.remove("SSI${this._index}");
+    prefs.remove("SSN${this._index}");
+    prefs.remove("SSP${this._index}");
+    prefs.remove("SSD${this._index}");
+    prefs.remove("SSO${this._index}");
+    prefs.remove("SSC${this._index}");
+  }
+}
+
+class Sessions {
+  // SS# -- session #
+  // SSI<Number> -- session id
+  // SSN<Number> -- session name
+  // SSP<Number> -- session icon
+  // SSD<Number> -- session device
+  // SSC<Number> -- session cookie
+  // SSO<Number> -- user script order
+  static List<Session>? metaList;
+
+  static init(SharedPreferences prefs) {
+    if (metaList != null) return metaList;
+    var len = prefs.getInt('SS#') ?? 0;
+    len = prefs.getInt('SS#') ?? 0;
+    metaList = [];
+    for (var i = 0; i < len; i++)
+      metaList?.add(Session.load(prefs, i));
+    return metaList;
+  }
+
+  static existSession(String cookie){
+    return Sessions.metaList?.any((session) => session.code == cookie);
+  }
+
+  static pop(int index) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    var toPop = Sessions.metaList![index];
+    for(var i = 0; i < Sessions.metaList!.length; i++) {
+      var e = Sessions.metaList![i];
+      if(e.order > toPop.order) e.setOrder(prefs, e.order - 1);
+    }
+
+    var pad = index == metaList!.length - 1 ? -1 : metaList!.length - 1;
+    var del = pad == -1 ? index : pad;
+
+    if(pad >= 0) metaList![pad].saveTo(prefs, index, true);
+    else metaList![del].delete(prefs);
+
+    if(pad >= 0) metaList![index] = metaList![pad];
+    metaList!.removeAt(del);
+
+    prefs.setInt('SS#', metaList!.length);
+  }
+  static push(String id, String name,
+      String icon, String device, String code) async {
+    if(name.length == 0 || code.length == 0) return;
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    var idx = metaList!.length;
+    metaList?.add(
+        Session.create(
+            idx, id, name, icon, device,
+            idx, code, prefs)
+    );
+    prefs.setInt('SS#', metaList!.length);
+  }
+
+  static ordered(callback){
+    return sortedRidx(metaList!.map((e) => e.order), metaList)
+        .map((idx) => metaList![idx])
+        .map(callback).toList();
+  }
+}
+// end sessions
 
 // beg ShrPrefSwitches
 Future<bool> saveSwitchState(String key, bool value) async {
@@ -396,6 +664,7 @@ Future initConfig() async {
   userAgent = prefs.getString('user-agent') ?? userAgent;
   for(var sps in shrPrefSwitches) await sps.init(prefs, (){});
   Scripts.init(prefs);
+  Sessions.init(prefs);
   botClient.doLoad(prefs);
 }
 
@@ -561,8 +830,8 @@ var settingsCode = (customCode) => '''
           && args[0].data.includes("message=")
           && args[0].data.match(/to=\$|to=&/)
           && args[0].data.match(/url=\$|url=&/)){
-          if(!args[0].data.includes("message=/")){
-            args[0].data = args[0].data.replace("message=", "message=/me");
+          if(!args[0].data.includes("message=%2F")){
+            args[0].data = args[0].data.replace("message=", "message=%2Fme");
             \$("#talks").children()[0].remove();
           }
         } 
