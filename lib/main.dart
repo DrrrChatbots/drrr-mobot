@@ -33,6 +33,10 @@ Future main() async {
 
   WidgetsFlutterBinding.ensureInitialized();
 
+  SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+    statusBarColor: Colors.black.withOpacity(0)
+  ));
+
   await AndroidAlarmManager.initialize();
 
   if (Platform.isAndroid) {
@@ -121,6 +125,7 @@ class _MyAppState extends State<MyApp> {
               NavigationControls(_controller.future),
               SampleMenu(_controller.future),
             ],
+            brightness: Brightness.dark
           ),
           body: SafeArea(
               child: Column(children: <Widget>[

@@ -10,6 +10,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/retry.dart';
+import 'package:flutter/services.dart';
 
 String capitalize(String str) {
   return str.length == 0 ? "" : "${str[0].toUpperCase()}${str.substring(1)}";
@@ -243,6 +244,7 @@ enum ShrPrefKey {
   alwaysMe,
   keepAlive,
   keepRoom,
+  showStatusBar,
 }
 
 // beg scripts
@@ -654,6 +656,18 @@ List<ShrPrefSwitch> shrPrefSwitches = [
       change: (bool value, webViewController, data) => {
         if(data.value){
           setShrPrefSwitches(ShrPrefKey.keepAlive, true, webViewController)
+        }
+      }),
+  ShrPrefSwitch(
+    ShrPrefKey.showStatusBar, "Show StatusBar",
+      const Icon(Icons.list),
+      change: (bool value, webViewController, data) => {
+        if(data.value){
+          setShrPrefSwitches(ShrPrefKey.showStatusBar, true, webViewController),
+          SystemChrome.setEnabledSystemUIOverlays(SystemUiOverlay.values)
+        }
+        else {
+          SystemChrome.setEnabledSystemUIOverlays([])
         }
       }),
 ];
